@@ -2,10 +2,6 @@
 __pycache__/
 *.pyc
 
-# Conda / venv
-env/
-.venv/
-rl_robot/
 
 # Stable-Baselines models
 *.zip
