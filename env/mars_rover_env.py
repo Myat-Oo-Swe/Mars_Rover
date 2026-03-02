@@ -5,24 +5,30 @@ import numpy as np
 
 class MarsRoverEnv(gym.Env):
 
-    def __init__(self):
+    def __init__(self, size=10, hazard_prob=0.2, view_size=5):
         super(MarsRoverEnv, self).__init__()
 
-        # ----- MAP -----
-        self.size = 10
+        self.size = size
+        self.hazard_prob = hazard_prob
+        self.view_size = view_size  # must be odd number (3,5,7...)
 
-        # Actions: 0=forward, 1=left, 2=right, 3=idle
+        self.max_steps = 200
+        self.max_energy = 100
+
+        # 4 actions: up, down, left, right
         self.action_space = spaces.Discrete(4)
 
-        # IMPORTANT: normalize observations (PPO learns MUCH better)
-        # All values scaled to 0..1
+        # Observation:
+        # [pos_x, pos_y] + flattened local terrain window
+        obs_size = 2 + (view_size * view_size)
+
         self.observation_space = spaces.Box(
-            low=np.array([0, 0, 0, 0, 0], dtype=np.float32),
-            high=np.array([1, 1, 1, 1, 1], dtype=np.float32),
+            low=0,
+            high=1,
+            shape=(obs_size,),
             dtype=np.float32
         )
 
-        self.max_steps = 200
         self.reset()
 
     # -------------------------------------------------
@@ -31,28 +37,26 @@ class MarsRoverEnv(gym.Env):
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
 
-        self.pos = np.array([0, 0], dtype=np.int32)
-        self.direction = 1  # 0=N, 1=E, 2=S, 3=W
-        self.goal = np.array([9, 9], dtype=np.int32)
+        # Generate terrain (0 = safe, 1 = hazard)
+        self.terrain = np.random.choice(
+            [0, 1],
+            size=(self.size, self.size),
+            p=[1 - self.hazard_prob, self.hazard_prob]
+        )
 
-        self.energy = 100.0
+        # Start & goal
+        self.pos = np.array([0, 0])
+        self.goal = np.array([self.size - 1, self.size - 1])
+
+        # Ensure start and goal are safe
+        self.terrain[0, 0] = 0
+        self.terrain[self.goal[0], self.goal[1]] = 0
+
         self.steps = 0
+        self.energy = self.max_energy
+        self.hazard_hits = 0
 
         return self._get_obs(), {}
-
-    # -------------------------------------------------
-    # OBSERVATION (NORMALIZED)
-    # -------------------------------------------------
-    def _get_obs(self):
-        dist = np.linalg.norm(self.goal - self.pos)
-
-        return np.array([
-            self.pos[0] / (self.size - 1),
-            self.pos[1] / (self.size - 1),
-            self.direction / 3.0,
-            self.energy / 100.0,
-            dist / np.sqrt(2*(self.size-1)**2)
-        ], dtype=np.float32)
 
     # -------------------------------------------------
     # STEP
@@ -60,67 +64,71 @@ class MarsRoverEnv(gym.Env):
     def step(self, action):
 
         self.steps += 1
+        self.energy -= 1
 
+        old_pos = self.pos.copy()
+
+        # Move rover
+        if action == 0:   # up
+            self.pos[0] -= 1
+        elif action == 1: # down
+            self.pos[0] += 1
+        elif action == 2: # left
+            self.pos[1] -= 1
+        elif action == 3: # right
+            self.pos[1] += 1
+
+        # Keep inside map
+        self.pos = np.clip(self.pos, 0, self.size - 1)
+
+        reward = -0.1  # small step penalty
+
+        # Hazard penalty
+        if self.terrain[self.pos[0], self.pos[1]] == 1:
+            reward -= 10
+            self.hazard_hits += 1
+
+        # Distance shaping reward
+        old_dist = np.linalg.norm(old_pos - self.goal)
+        new_dist = np.linalg.norm(self.pos - self.goal)
+        reward += (old_dist - new_dist)
+
+        # Goal reward
         terminated = False
-        truncated = False
-
-        # small time penalty
-        reward = -0.05
-
-        old_dist = np.linalg.norm(self.goal - self.pos)
-
-        # ----- TURN LEFT -----
-        if action == 1:
-            self.direction = (self.direction - 1) % 4
-            self.energy -= 0.3
-
-        # ----- TURN RIGHT -----
-        elif action == 2:
-            self.direction = (self.direction + 1) % 4
-            self.energy -= 0.3
-
-        # ----- MOVE FORWARD -----
-        elif action == 0:
-
-            move = {
-                0: np.array([-1, 0]),   # North
-                1: np.array([0, 1]),    # East
-                2: np.array([1, 0]),    # South
-                3: np.array([0, -1])    # West
-            }[self.direction]
-
-            new_pos = self.pos + move
-
-            # boundary check
-            if 0 <= new_pos[0] < self.size and 0 <= new_pos[1] < self.size:
-                self.pos = new_pos
-                self.energy -= 1.0
-            else:
-                reward -= 1.0  # wall hit penalty
-
-        # ----- IDLE -----
-        elif action == 3:
-            self.energy -= 0.2
-            reward -= 0.1
-
-        # ----- PROGRESS REWARD -----
-        new_dist = np.linalg.norm(self.goal - self.pos)
-        reward += (old_dist - new_dist) * 2.5
-
-        # ----- GOAL -----
         if np.array_equal(self.pos, self.goal):
-            reward += 100
+            reward += 200
             terminated = True
 
-        # ----- ENERGY -----
-        if self.energy <= 0:
-            reward -= 40
-            terminated = True
-
-        # ----- STEP LIMIT -----
-        if self.steps >= self.max_steps:
+        truncated = False
+        if self.steps >= self.max_steps or self.energy <= 0:
             truncated = True
 
-        self.energy = max(self.energy, 0)
-
         return self._get_obs(), reward, terminated, truncated, {}
+
+    # -------------------------------------------------
+    # PARTIAL OBSERVATION
+    # -------------------------------------------------
+    def _get_obs(self):
+
+        # Normalized position
+        pos_norm = self.pos / (self.size - 1)
+
+        # Get local window
+        half = self.view_size // 2
+
+        padded = np.pad(self.terrain, pad_width=half, mode='constant', constant_values=1)
+
+        x, y = self.pos
+        x_p = x + half
+        y_p = y + half
+
+        local_view = padded[
+            x_p - half:x_p + half + 1,
+            y_p - half:y_p + half + 1
+        ]
+
+        local_view = local_view.flatten()
+
+        obs = np.concatenate([pos_norm, local_view]).astype(np.float32)
+
+        return obs

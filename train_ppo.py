@@ -24,7 +24,7 @@ model = PPO(
 )
 
 # Train
-model.learn(total_timesteps=300000)
+model.learn(total_timesteps=100000)
 
 # Save
 model.save("mars_rover_ppo")
