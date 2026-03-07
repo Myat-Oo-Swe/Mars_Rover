@@ -3,8 +3,6 @@ __pycache__/
 *.pyc
 
 
-# Stable-Baselines models
-*.zip
 
 # OS
 .DS_Store

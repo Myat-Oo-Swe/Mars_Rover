@@ -2,27 +2,50 @@ from env.mars_rover_env import MarsRoverEnv
 from stable_baselines3 import PPO
 import numpy as np
 
+
 # -------------------------
-# FUNCTION TO PRINT MAP
+# PRINT TERRAIN MAP
 # -------------------------
 def print_map(env, path=None, title="MAP"):
 
     print(f"\n===== {title} =====\n")
 
     for i in range(env.size):
+
         row = ""
+
         for j in range(env.size):
 
-            if (i, j) == (0, 0):
+            if (i,j) == tuple(env.start):
                 row += " S "
-            elif (i, j) == (env.goal[0], env.goal[1]):
+
+            elif (i,j) == tuple(env.goal):
                 row += " G "
-            elif path is not None and (i, j) in path:
+
+            elif (i,j) == tuple(env.pos):
+                row += " R "
+
+            elif path is not None and (i,j) in path:
                 row += " * "
-            elif env.terrain[i, j] == 1:
-                row += " X "
+
             else:
-                row += " . "
+
+                t = env.terrain[i,j]
+
+                if t == 0:
+                    row += " . "
+
+                elif t == 1:
+                    row += " D "
+
+                elif t == 2:
+                    row += " K "   # rock (changed from R to avoid confusion)
+
+                elif t == 3:
+                    row += " L "
+
+                elif t == 4:
+                    row += " X "
 
         print(row)
 
@@ -31,46 +54,54 @@ def print_map(env, path=None, title="MAP"):
 # LOAD ENV + MODEL
 # -------------------------
 env = MarsRoverEnv()
+
 model = PPO.load("mars_rover_ppo")
 
-obs, _ = env.reset()
+obs,_ = env.reset(options={
+    "start_pos":(2,2),
+    "goal_pos":(18,18)
+})
 
-# Show terrain BEFORE movement
-print_map(env, title="INITIAL MARS TERRAIN")
+# store start location
+env.start = tuple(env.pos)
+
+print_map(env,title="INITIAL MARS TERRAIN")
+
 
 total_reward = 0
 path = []
 done = False
+
 
 # -------------------------
 # RUN EPISODE
 # -------------------------
 while not done:
 
-    action, _ = model.predict(obs, deterministic=True)
-    obs, reward, terminated, truncated, _ = env.step(action)
+    action,_ = model.predict(obs,deterministic=True)
+
+    obs,reward,terminated,truncated,_ = env.step(action)
 
     total_reward += reward
 
-    x = int(obs[0] * (env.size - 1))
-    y = int(obs[1] * (env.size - 1))
-
-    path.append((x, y))
+    # use true rover position
+    path.append(tuple(env.pos))
 
     done = terminated or truncated
 
 
-# Show terrain AFTER movement
-print_map(env, path=path, title="FINAL MAP WITH ROVER PATH")
+print_map(env,path=path,title="FINAL MAP WITH ROVER PATH")
 
 
 # -------------------------
 # MISSION SUMMARY
 # -------------------------
 print("\n===== MISSION SUMMARY =====")
-print(f"Success: {np.array_equal(env.pos, env.goal)}")
+
+print(f"Success: {np.array_equal(env.pos,env.goal)}")
 print(f"Total Steps: {env.steps}")
 print(f"Total Reward: {round(total_reward,2)}")
 print(f"Energy Remaining: {round(env.energy,2)}")
 print(f"Hazard Hits: {env.hazard_hits}")
+
 print("===========================")
